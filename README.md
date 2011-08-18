@@ -1,7 +1,7 @@
 This is video-gallery. It's a simple bash script to facilitate the generation of those thumbnail 
 overviews you've probably seen before:
 
-![Sample output](example.png)
+![Sample output](/rtlong/video-gallery/raw/master/example.png)
 
 # Why?
 
