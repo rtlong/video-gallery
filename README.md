@@ -1,7 +1,7 @@
 This is video-gallery. It's a simple bash script to facilitate the generation of those thumbnail 
 overviews you've probably seen before:
 
-[img]
+![Sample output](example.png)
 
 # Why?
 
@@ -14,6 +14,7 @@ Couldn't be easier:
 ```
 $ video-gallery VIDEO_FILE
 ```
+It will save the image as a PNG in the same directory as the video, with the same name.
 
 Currently, it only accepts one file at a time, but that's easy to deal with using a for loop:
 
