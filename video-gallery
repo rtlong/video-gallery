@@ -1,0 +1,129 @@
+#!/bin/bash
+set -e # die on error
+[[ ${!DEBUG[@]} ]] && set -x # show debug output if DEBUG was set
+set -u # warn about trying to access unset vars
+
+# clean up temp during exit
+function clean_up(){
+  [[ -e /proc/$FF_PID ]] && kill $FF_PID # Make sure that the ffmpeg instance gets killed upon exit
+  [[ ${!DEBUG[@]} ]] || rm -rf $WORK_DIR # wipe the temp dir, but only if not debugging
+  exit
+}
+# Thanks to http://www.prupert.co.uk/2010/05/11/finally-a-bash-progress-indicator-for-ffmpeg-that-works/
+display_ffmpeg_progress () { # Calculate/collect progress
+  START=$(date +%s); FR_CNT=0; ETA=0; ELAPSED=0
+  while [[ -e /proc/$FF_PID ]]; do # Is FFmpeg running?
+    sleep 1
+    VSTATS=$( grep -Eo "frame=\s*[0-9]+" "$ff_log" | tail -n1 | grep -Eo "[0-9]+" ) # Parse vstats file.
+    if [[ -n $VSTATS ]] && [[ $VSTATS -gt $FR_CNT ]]; then # Parsed sane or no?
+      FR_CNT=$VSTATS
+      PERCENTAGE=$(( 100 * FR_CNT / MAXTHUMB )) # Progbar calc.
+      ELAPSED=$(( $(date +%s) - START ))
+      remaining=$(echo "( $ELAPSED / $FR_CNT ) * ( $MAXTHUMB + 1 - $FR_CNT )" | bc)
+      ETA=$(date -d @${remaining} -u +%H:%M:%S) # ETA calc.
+      
+      # Text for stats output.
+      echo -ne "\rFrame:$FR_CNT of $((MAXTHUMB+1)) Time:$(date -d @$ELAPSED -u +%H:%M:%S) ETA:$ETA Percent:$PERCENTAGE" 
+    fi
+  done
+}
+# Original credit for this script goes to Rich Jerrido:
+# http://www.outsidaz.org/blog/2009/10/26/screencap-generation-via-ffmpeg-and-imagemagick/
+
+# TODO: Provide these as command-line options
+
+# Video file to work on
+VIDEO=$(readlink -e "$1")
+# Number of Thumbnails to be created. It is advisable to use a number that makes a perfect square such as 9,16,25
+MAXTHUMB=25
+# Size of thumbnails
+THUMBSIZE="202"
+# output directory
+OUTPUT_DIR=$(dirname "$VIDEO")
+# working directory
+WORK_DIR="/tmp/thumbnail"
+IMAGE_FORMAT=png
+
+# Check for dependencies
+for dep in {convert,montage}; do
+  hash $dep 2>&- || { echo >&2 "I require '$dep' but it's not installed. It's available as part of the ImageMagick suite. Aborting."; exit 1; }
+done
+for dep in {ffmpeg,ffprobe}; do
+  hash $dep 2>&- || { echo >&2 "I require '$dep' but it's not installed. Hint: Install the 'ffmpeg' package. Aborting."; exit 1; }
+done
+hash 'bc' 2>&- || { echo >&2 "I require 'bc' but it's not installed. Aborting."; exit 1; }
+
+# clear work directory before each run
+rm -rf "$WORK_DIR" 
+
+# create work dir if non-existent
+[[ -w "$WORK_DIR" ]] || mkdir -p "$WORK_DIR"
+# create output dir if non-existent
+[[ -w "$OUTPUT_DIR" ]] || mkdir -p "$OUTPUT_DIR"
+
+## These variables gather some information about the video file
+video_info=$( ffprobe "$VIDEO" 2>&1 )
+
+duration_string=$( grep -Eo "Duration: [0-9]{2,}:[0-9]{2}:[0-9]{2}.[0-9]{2}" <<< "$video_info" | cut -f2 -d" " )
+IFS=':' read -ra duration_array <<< "$duration_string"
+duration_hours=${duration_array[0]}
+duration_minutes=${duration_array[1]}
+duration_seconds=${duration_array[2]}
+duration=$( echo "$duration_seconds + 60*$duration_minutes + 3600*$duration_hours" | bc )
+fps=$( sed -n "s/.*, \(.*\) tbr.*/\1/p" <<< "$video_info" )
+size=$( grep "Video:" <<< "$video_info" | grep -Eo '[0-9]+x[0-9]+' )
+width=$( cut -f 1 -d "x" <<< $size )
+height=$( cut -f 2 -d "x" <<< $size )
+codec=$( grep -Eo "Video: [^ ,]+" <<< "$video_info" | cut -f 2 -d " " )
+
+video_basename=$( basename "$VIDEO" )
+echo "*** You specified an input file of -> $VIDEO"
+echo "*** You specified a working directory of -> $WORK_DIR"
+echo "*** You specified a output directory of -> $OUTPUT_DIR"
+
+video_no_ext="${video_basename%.*}"
+temp_image="$WORK_DIR/$video_no_ext.$IMAGE_FORMAT"
+output_image="$OUTPUT_DIR/$video_no_ext.$IMAGE_FORMAT"
+interval=$( echo "($duration - 60) / $MAXTHUMB" | bc )
+
+trap 'clean_up' INT # Quit on ^C instead of killing the ffmpeg process and continuing
+
+echo "*** Extracting ${MAXTHUMB} frames...    " # leave the extra spaces on the end for the counter to delete
+ff_log="$WORK_DIR/ffmpeg_output"
+
+# Dump MAXTHUMB+1 frames from the video, starting at 00:00:30 and evenly spaced till the end
+ffmpeg -y -i "$VIDEO" -ss 30 -r "1/$interval" -vframes $((MAXTHUMB + 1)) -bt 100000000 "$WORK_DIR/${video_no_ext}_%03d.$IMAGE_FORMAT" 2> "$ff_log" &
+FF_PID=$!
+
+# Show the progress and wait for ffmpeg to finish
+display_ffmpeg_progress
+
+# delete the first from, since it seems the first and second are always the same...
+rm "$WORK_DIR/${video_no_ext}_001.$IMAGE_FORMAT"
+
+i=1
+echo
+echo -n "*** Resizing frames...    "
+shopt -s nullglob
+for img in "$WORK_DIR/${video_no_ext}"_*.$IMAGE_FORMAT; do
+  count=$( printf %03s $i ) # use space-padding for the counter
+  echo -en "\b\b\b$count" # Show a counter as it goes, to give progress
+  
+  convert -quality 100 -resize "$THUMBSIZE" "$img" "$img" & # do this in the background so we don't have to wait for it
+  
+  i=$(( i + 1 ))
+done
+wait # make sure all those background converts have finished
+
+echo
+echo "*** Assembling montage..."
+montage -background black -borderwidth 0 -geometry "+1+1" "$WORK_DIR/${video_no_ext}*.${IMAGE_FORMAT}" "$temp_image"
+
+LABEL="Filename: $video_basename | Codec: $codec | Size: $size | Length: $duration_string | FPS: $fps"
+echo "*** I will apply the following label -> $LABEL"
+
+convert -gravity North -splice 0x28 -background black -fill white -font DejaVu-Sans-Book -pointsize 12 -annotate +0+6 "$LABEL" "$temp_image" "$output_image"
+
+echo "*** Final screencap image is stored here -> $output_image"
+
+clean_up
