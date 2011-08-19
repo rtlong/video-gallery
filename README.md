@@ -34,7 +34,7 @@ providing the script with multiple videos.
 
 I must acknowledge the efforts of:
 
-- [Rupert Plumridge](http://www.prupert.co.uk/2011/04/07/a-better-ffmpeg-progress-script/)
 - [Rich Jerrido](http://www.outsidaz.org/blog/2009/10/26/screencap-generation-via-ffmpeg-and-imagemagick/)
+- [Rupert Plumridge](http://www.prupert.co.uk/2011/04/07/a-better-ffmpeg-progress-script/)
 
 ...for the bits of their that code I used, which is noted in the script.
